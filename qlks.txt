@@ -1,0 +1,267 @@
+CREATE TABLE Phong (
+    MaPhong VARCHAR2(10) PRIMARY KEY,
+    LoaiPhong VARCHAR2(30),
+    TrangThai VARCHAR2(20),
+    GiaTheoGio NUMBER,
+    GiaTheoNgay NUMBER,
+    SoNguoiToiDa NUMBER
+);
+CREATE TABLE KhachHang (
+    MaKH VARCHAR2(10) PRIMARY KEY,
+    HoTen VARCHAR2(50),
+    CCCD VARCHAR2(20),
+    SoDT VARCHAR2(15),
+    Email VARCHAR2(50),
+    QuocTich VARCHAR2(30)
+);
+CREATE TABLE HoaDon (
+    MaHD VARCHAR2(10) PRIMARY KEY,
+    MaKH VARCHAR2(10),
+    MaPhong VARCHAR2(10),
+    NgayNhan DATE,
+    NgayTra DATE,
+    SoNguoi NUMBER,
+    TongTien NUMBER,
+    TrangThai VARCHAR2(20),
+
+    CONSTRAINT fk_hd_kh FOREIGN KEY (MaKH) REFERENCES KhachHang(MaKH),
+    CONSTRAINT fk_hd_phong FOREIGN KEY (MaPhong) REFERENCES Phong(MaPhong)
+);
+CREATE TABLE ChiPhiPhuThu (
+    MaCP VARCHAR2(10) PRIMARY KEY,
+    MaHD VARCHAR2(10),
+    MoTa VARCHAR2(100),
+    SoTien NUMBER,
+    ThoiGian DATE,
+
+    CONSTRAINT fk_cp_hd FOREIGN KEY (MaHD) REFERENCES HoaDon(MaHD)
+);
+CREATE TABLE LichSuPhong (
+    MaLS VARCHAR2(10) PRIMARY KEY,
+    MaPhong VARCHAR2(10),
+    MaHD VARCHAR2(10),
+    NgayNhan DATE,
+    NgayTra DATE,
+    GhiChu VARCHAR2(100)
+);
+CREATE OR REPLACE PACKAGE pkg_state AS
+    g_row_count NUMBER := 0;
+END;
+/
+CREATE OR REPLACE TRIGGER trg_DatPhong
+BEFORE INSERT ON HoaDon
+FOR EACH ROW
+DECLARE
+    v_tt VARCHAR2(20);
+    v_songuoi NUMBER;
+    v_gia NUMBER;
+BEGIN
+    SELECT TrangThai, SoNguoiToiDa, GiaTheoNgay
+    INTO v_tt, v_songuoi, v_gia
+    FROM Phong
+    WHERE MaPhong = :NEW.MaPhong;
+
+    IF v_tt <> 'TRONG' THEN
+        RAISE_APPLICATION_ERROR(-20001, 'Phong khong trong');
+    END IF;
+
+    IF :NEW.SoNguoi > v_songuoi THEN
+        RAISE_APPLICATION_ERROR(-20002, 'Vuot so nguoi');
+    END IF;
+
+    IF :NEW.NgayNhan >= :NEW.NgayTra OR :NEW.NgayNhan < TRUNC(SYSDATE) THEN
+        RAISE_APPLICATION_ERROR(-20003, 'Ngay sai');
+    END IF;
+
+    :NEW.TongTien := (:NEW.NgayTra - :NEW.NgayNhan) * v_gia;
+
+    UPDATE Phong
+    SET TrangThai = 'DA_THUE'
+    WHERE MaPhong = :NEW.MaPhong;
+
+END;
+/
+CREATE OR REPLACE TRIGGER trg_CapNhatTrangThaiHD
+BEFORE UPDATE OF TrangThai ON HoaDon
+FOR EACH ROW
+BEGIN
+    IF :OLD.TrangThai = 'CHO_NHAN' THEN
+        IF :NEW.TrangThai NOT IN ('DANG_O','HUY') THEN
+            RAISE_APPLICATION_ERROR(-20001,'Sai trang thai');
+        END IF;
+
+    ELSIF :OLD.TrangThai = 'DANG_O' THEN
+        IF :NEW.TrangThai <> 'DA_TRA' THEN
+            RAISE_APPLICATION_ERROR(-20002,'Sai trang thai');
+        END IF;
+
+    ELSE
+        RAISE_APPLICATION_ERROR(-20003,'Khong duoc doi');
+    END IF;
+
+    IF :NEW.TrangThai = 'DA_TRA' THEN
+        UPDATE Phong SET TrangThai='TRONG'
+        WHERE MaPhong=:OLD.MaPhong;
+
+        INSERT INTO LichSuPhong
+        VALUES ('LS'||TO_CHAR(SYSDATE,'HH24MISS'),
+                :OLD.MaPhong,:OLD.MaHD,
+                :OLD.NgayNhan,:OLD.NgayTra,'Tra phong');
+    END IF;
+
+    IF :NEW.TrangThai = 'HUY' THEN
+        UPDATE Phong SET TrangThai='TRONG'
+        WHERE MaPhong=:OLD.MaPhong;
+    END IF;
+END;
+/
+CREATE OR REPLACE TRIGGER trg_vwPhongTrong_ins
+INSTEAD OF INSERT ON vw_PhongTrong
+FOR EACH ROW
+DECLARE
+    v_mahd VARCHAR2(20);
+BEGIN
+    v_mahd := 'HD' || TO_CHAR(SEQ_HD.NEXTVAL,'FM0000');
+
+    INSERT INTO HoaDon
+    VALUES (v_mahd, :NEW.MaKH, :NEW.MaPhong,
+            :NEW.NgayNhan, :NEW.NgayTra,
+            :NEW.SoNguoi, NULL, 'CHO_NHAN');
+END;
+/
+
+
+INSERT INTO KhachHang VALUES ('KH01','Nguyen Van A','123456','0909','a@gmail.com','VN');
+INSERT INTO KhachHang VALUES ('KH02','Tran Thi B','654321','0911','b@gmail.com','VN');
+INSERT INTO Phong VALUES ('P01','VIP','TRONG',100,500,2);
+INSERT INTO Phong VALUES ('P02','Thuong','TRONG',50,300,4);
+INSERT INTO Phong VALUES ('P03','VIP','BAO_TRI',100,500,2);
+INSERT INTO HoaDon
+VALUES ('HD01','KH01','P01',SYSDATE,SYSDATE+2,2,NULL,'CHO_NHAN');
+
+INSERT INTO HoaDon
+VALUES ('HD02','KH01','P03',SYSDATE,SYSDATE+1,2,NULL,'CHO_NHAN');
+
+UPDATE HoaDon
+SET TrangThai = 'DANG_O'
+WHERE MaHD = 'HD01';
+
+UPDATE HoaDon
+SET TrangThai = 'DA_TRA'
+WHERE MaHD = 'HD01';
+SELECT * FROM Phong WHERE MaPhong='P01';
+SELECT * FROM LichSuPhong;
+
+UPDATE HoaDon
+SET TrangThai = 'DA_TRA'
+WHERE MaHD = 'HD01';
+
+CREATE OR REPLACE TRIGGER trg_SuaChiPhi
+FOR INSERT OR UPDATE ON ChiPhiPhuThu
+COMPOUND TRIGGER
+
+    v_count NUMBER := 0;
+
+BEFORE STATEMENT IS
+BEGIN
+    v_count := 0;
+END BEFORE STATEMENT;
+
+BEFORE EACH ROW IS
+BEGIN
+    v_count := v_count + 1;
+
+    IF v_count > 5 THEN
+        RAISE_APPLICATION_ERROR(-20001, 'Toi da 5 chi phi');
+    END IF;
+
+    IF :NEW.SoTien <= 0 OR :NEW.SoTien > 50000000 THEN
+        RAISE_APPLICATION_ERROR(-20002, 'So tien khong hop le');
+    END IF;
+
+END BEFORE EACH ROW;
+
+AFTER STATEMENT IS
+BEGIN
+    UPDATE HoaDon hd
+    SET hd.TongTien = NVL((
+        SELECT SUM(cp.SoTien)
+        FROM ChiPhiPhuThu cp
+        WHERE cp.MaHD = hd.MaHD
+    ),0);
+END AFTER STATEMENT;
+
+END trg_SuaChiPhi;
+/
+
+INSERT INTO ChiPhiPhuThu VALUES ('CP01','HD01','Nuoc',10000,SYSDATE);
+INSERT INTO ChiPhiPhuThu VALUES ('CP02','HD01','Do an',20000,SYSDATE);
+
+INSERT INTO ChiPhiPhuThu VALUES ('CP07','HD01','Sai',-100,SYSDATE);
+
+CREATE OR REPLACE VIEW vw_PhongTrong AS
+SELECT 
+    p.MaPhong,
+    p.LoaiPhong,
+    p.TrangThai,
+    p.GiaTheoNgay,
+    p.SoNguoiToiDa,
+
+    -- các cột nhập
+    CAST(NULL AS VARCHAR2(10)) AS MaKH,
+    CAST(NULL AS DATE) AS NgayNhan,
+    CAST(NULL AS DATE) AS NgayTra,
+    CAST(NULL AS NUMBER) AS SoNguoi
+
+FROM Phong p
+WHERE p.TrangThai = 'TRONG';
+
+CREATE SEQUENCE SEQ_HD START WITH 1 INCREMENT BY 1;
+
+CREATE OR REPLACE TRIGGER trg_vwPhongTrong_ins
+INSTEAD OF INSERT ON vw_PhongTrong
+FOR EACH ROW
+DECLARE
+    v_mahd VARCHAR2(20);
+    v_makh VARCHAR2(10);
+BEGIN
+    v_mahd := 'HD' || TO_CHAR(SEQ_HD.NEXTVAL, 'FM0000');
+    IF :NEW.MaKH IS NULL THEN
+        SELECT MaKH INTO v_makh
+        FROM KhachHang
+        WHERE ROWNUM = 1;
+    ELSE
+        v_makh := :NEW.MaKH;
+    END IF;
+    INSERT INTO HoaDon (
+        MaHD, MaKH, MaPhong, NgayNhan, NgayTra, SoNguoi, TrangThai
+    )
+    VALUES (
+        v_mahd,
+        v_makh,
+        :NEW.MaPhong,
+        :NEW.NgayNhan,
+        :NEW.NgayTra,
+        :NEW.SoNguoi,
+        'CHO_NHAN'
+    );
+END;
+/
+INSERT INTO vw_PhongTrong (
+    MaPhong, MaKH, NgayNhan, NgayTra, SoNguoi
+)
+VALUES (
+    'P01','KH01',
+    SYSDATE, SYSDATE+2,
+    2
+);
+
+INSERT INTO vw_PhongTrong (
+    MaPhong, NgayNhan, NgayTra, SoNguoi
+)
+VALUES (
+    'P02',
+    SYSDATE, SYSDATE+1,
+    2
+);
+SELECT * FROM HoaDon;
